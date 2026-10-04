@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "name": "spillway-gate-coordinator",
+  "project_shape": "backend",
+  "language": "go",
+  "modules": [
+    {
+      "id": "entrypoint",
+      "path": "cmd/server",
+      "responsibility": "process entrypoint, listener configuration, graceful shutdown"
+    },
+    {
+      "id": "bootstrap",
+      "path": "internal/bootstrap",
+      "responsibility": "runtime dependency assembly"
+    },
+    {
+      "id": "httpapi",
+      "path": "internal/httpapi",
+      "responsibility": "HTTP routing, JSON boundaries, status mapping"
+    },
+    {
+      "id": "coordination",
+      "path": "internal/coordination",
+      "responsibility": "workflow orchestration and execution token issuance"
+    },
+    {
+      "id": "domain",
+      "path": "internal/domain",
+      "responsibility": "entities, invariants, and state transitions"
+    },
+    {
+      "id": "storage",
+      "path": "internal/storage",
+      "responsibility": "mutex-protected in-memory persistence and atomic updates"
+    },
+    {
+      "id": "contracts",
+      "path": "internal/contracts",
+      "responsibility": "request, response, and stable error contracts"
+    }
+  ],
+  "workflows": [
+    {
+      "id": "register-gate",
+      "name": "Register gate",
+      "entry": "POST /gates",
+      "steps": [
+        "decode and validate the public request",
+        "apply gate entity invariants",
+        "persist the gate without replacing an existing identifier"
+      ],
+      "success": "returns the created gate with idle status",
+      "failure": "returns stable invalid input or duplicate identifier errors",
+      "verification": "workflowcheck creates a gate and reads it through GET /gates/{id}",
+      "module_ids": [
+        "entrypoint",
+        "httpapi",
+        "coordination",
+        "domain",
+        "storage",
+        "contracts"
+      ]
+    },
+    {
+      "id": "request-gate-command",
+      "name": "Request gate command",
+      "entry": "POST /commands",
+      "steps": [
+        "load the target gate",
+        "validate target aperture and request fields",
+        "persist a pending command with the starting aperture snapshot"
+      ],
+      "success": "returns a pending command that references the current gate state",
+      "failure": "returns not found for an unknown gate and invalid input for out-of-range data",
+      "verification": "workflowcheck creates a gate, submits a command, and reads the pending command",
+      "module_ids": [
+        "entrypoint",
+        "httpapi",
+        "coordination",
+        "domain",
+        "storage",
+        "contracts"
+      ]
+    },
+    {
+      "id": "review-safety-interlock",
+      "name": "Review safety interlock",
+      "entry": "POST /commands/{id}/interlock",
+      "steps": [
+        "validate the review decision",
+        "transition the command according to the verdict",
+        "reserve the gate and issue an execution token only for a clear decision"
+      ],
+      "success": "returns an approved command and one execution token",
+      "failure": "returns a stable conflict when another command already owns the gate",
+      "verification": "workflowcheck clears one command and proves a second clear review cannot reserve the same gate",
+      "module_ids": [
+        "entrypoint",
+        "httpapi",
+        "coordination",
+        "domain",
+        "storage",
+        "contracts"
+      ]
+    },
+    {
+      "id": "execute-gate-command",
+      "name": "Execute gate command",
+      "entry": "POST /commands/{id}/execute",
+      "steps": [
+        "validate the command, gate reservation, and one-time token",
+        "apply approved to executing to terminal command transitions",
+        "settle the gate aperture and release the active command reference atomically"
+      ],
+      "success": "returns a completed command and an idle gate at the target aperture",
+      "failure": "returns conflict for an invalid or reused token; a simulated fault aborts the command and latches the gate in faulted status",
+      "verification": "workflowcheck executes a reviewed command, confirms the new aperture, and proves token reuse is rejected",
+      "module_ids": [
+        "entrypoint",
+        "httpapi",
+        "coordination",
+        "domain",
+        "storage",
+        "contracts"
+      ]
+    }
+  ],
+  "complexity": {
+    "mechanisms": [
+      "state_transition",
+      "concurrency",
+      "resource_lifetime",
+      "error_propagation"
+    ],
+    "notes": "Gate reservation and command transitions are committed under one repository lock; execution tokens are single-command resources and become invalid after a terminal transition."
+  }
+}

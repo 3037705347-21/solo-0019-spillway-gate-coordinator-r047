@@ -1,0 +1,172 @@
+{
+  "task_source_schema_version": 1,
+  "entities": [
+    {
+      "id": "gate",
+      "label": "闸门",
+      "relations": [
+        "gate_command.gate_id belongs_to gate.id"
+      ],
+      "invariants": [
+        "闸门标识唯一",
+        "开度必须位于零和最大开度之间",
+        "同一时刻最多只有一条活动命令占用闸门",
+        "活动命令引用必须与已通过复核的命令一致"
+      ]
+    },
+    {
+      "id": "gate_command",
+      "label": "开度调整命令",
+      "relations": [
+        "gate_command.gate_id belongs_to gate.id",
+        "interlock_decision belongs_to gate_command"
+      ],
+      "invariants": [
+        "起始开度在创建时冻结",
+        "待复核命令没有执行令牌",
+        "执行令牌在终态后不可复用",
+        "拒绝、完成和中止都是单向终态"
+      ]
+    },
+    {
+      "id": "interlock_decision",
+      "label": "安全联锁结论",
+      "relations": [
+        "interlock_decision reviewed_by safety_verifier",
+        "gate_command has_one interlock_decision"
+      ],
+      "invariants": [
+        "每条命令只能写入一次联锁结论",
+        "blocked 结论不能占用闸门",
+        "clear 结论必须与闸门占用一起成功"
+      ]
+    }
+  ],
+  "state_machines": [
+    {
+      "subject": "gate",
+      "states": [
+        "idle",
+        "reserved",
+        "moving",
+        "faulted"
+      ],
+      "transitions": [
+        "idle->reserved",
+        "reserved->moving",
+        "moving->idle",
+        "moving->faulted"
+      ],
+      "invariants": [
+        "reserved 和 moving 必须绑定活动命令",
+        "faulted 不参与自动恢复",
+        "settle 后活动命令引用必须清空"
+      ]
+    },
+    {
+      "subject": "gate_command",
+      "states": [
+        "pending",
+        "approved",
+        "rejected",
+        "executing",
+        "completed",
+        "aborted"
+      ],
+      "transitions": [
+        "pending->approved",
+        "pending->rejected",
+        "approved->executing",
+        "executing->completed",
+        "executing->aborted"
+      ],
+      "invariants": [
+        "只有 pending 可以复核",
+        "只有 approved 可以执行",
+        "终态不可回退",
+        "版本号在每次转换后递增"
+      ]
+    }
+  ],
+  "capability_families": [
+    {
+      "family": "状态机与流转",
+      "occupied_by": [
+        "gate_status_transitions",
+        "command_status_transitions"
+      ],
+      "available": false
+    },
+    {
+      "family": "并发与锁",
+      "occupied_by": [
+        "atomic_gate_reservation"
+      ],
+      "available": true
+    },
+    {
+      "family": "资源生命周期",
+      "occupied_by": [
+        "execution_token_lifetime"
+      ],
+      "available": true
+    },
+    {
+      "family": "错误传播",
+      "occupied_by": [
+        "stable_domain_error_codes"
+      ],
+      "available": true
+    },
+    {
+      "family": "恢复与回滚",
+      "occupied_by": [],
+      "available": true
+    }
+  ],
+  "extension_seams": [
+    {
+      "id": "command-event-timeline",
+      "anchor": "GateCommand.Version and UpdatedAt",
+      "entry": "GET /commands/{id}",
+      "distinct_outcome": "按版本读取命令转换时间线，而不只返回当前快照",
+      "mechanism": "versioned_event_projection"
+    },
+    {
+      "id": "gate-group-batch",
+      "anchor": "MemoryRepository mutex-protected maps",
+      "entry": "current per-gate command API",
+      "distinct_outcome": "在一批闸门上原子占用或整体回滚",
+      "mechanism": "atomic_batch_commit"
+    },
+    {
+      "id": "fault-clearance",
+      "anchor": "GateStatusFaulted and final aperture",
+      "entry": "GET /gates/{id}",
+      "distinct_outcome": "增加有条件的故障清除流程并恢复 idle",
+      "mechanism": "guarded_state_transition"
+    }
+  ],
+  "tension_points": [
+    {
+      "workflow_id": "register-gate",
+      "description": "重复登记既可以被视为幂等成功，也可以被视为与唯一标识约束冲突；当前业务要求保留既有闸门且拒绝覆盖",
+      "observable_failure": "第二次登记返回成功但悄悄改写名称、最大开度或初始开度"
+    },
+    {
+      "workflow_id": "request-gate-command",
+      "description": "命令可以在待复核阶段创建，但目标开度必须基于当时闸门限制校验，且起始开度快照不能被后续状态变化改写",
+      "observable_failure": "越界目标被接受，或起始开度在执行前被重新读取并发生漂移"
+    },
+    {
+      "workflow_id": "review-safety-interlock",
+      "description": "clear 复核既包含命令转换也包含闸门占用；并发提交时可能都读到空闲闸门，只有原子占用能保证单一赢家",
+      "observable_failure": "两条命令都被置为 approved，或命令已 approved 但闸门仍显示 idle"
+    },
+    {
+      "workflow_id": "execute-gate-command",
+      "description": "执行必须同时校验活动命令、命令状态和一次性令牌；故障路径还要原子地中止命令并把闸门锁存为 faulted",
+      "observable_failure": "错误或复用令牌仍改变状态，故障时只更新命令未更新闸门，或只更新闸门未清除活动引用"
+    }
+  ]
+}

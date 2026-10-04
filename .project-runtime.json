@@ -1,0 +1,31 @@
+{
+  "language": "go",
+  "project_shape": "backend",
+  "source_extensions": [
+    ".go"
+  ],
+  "build_command": "go build ./...",
+  "testing": "deferred",
+  "service": {
+    "run_command": "go run ./cmd/server --addr 127.0.0.1:18119",
+    "health_url": "http://127.0.0.1:18119/health"
+  },
+  "workflow_checks": [
+    {
+      "workflow_id": "register-gate",
+      "command": "go run ./cmd/workflowcheck --workflow register-gate"
+    },
+    {
+      "workflow_id": "request-gate-command",
+      "command": "go run ./cmd/workflowcheck --workflow request-gate-command"
+    },
+    {
+      "workflow_id": "review-safety-interlock",
+      "command": "go run ./cmd/workflowcheck --workflow review-safety-interlock"
+    },
+    {
+      "workflow_id": "execute-gate-command",
+      "command": "go run ./cmd/workflowcheck --workflow execute-gate-command"
+    }
+  ]
+}
