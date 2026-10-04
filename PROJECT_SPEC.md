@@ -39,6 +39,8 @@
 - `gate` 状态：idle、reserved、moving、faulted。
 - `gate_command` 状态：pending、approved、rejected、executing、completed、aborted。
 - 只有 pending 命令可以复核。
+- 复核有效期只约束 pending 命令；到期未复核的命令由巡检置为 expired。
+- 已 approved 的命令在执行结束前持续有效，巡检不会使其过期，也不会释放其闸门占用。
 - 只有 approved 命令可以执行，且执行令牌必须匹配。
 - clear 复核与闸门占用必须同时成功；任一步失败时两者都不写入。
 - blocked 复核使命令 rejected，不会占用闸门。

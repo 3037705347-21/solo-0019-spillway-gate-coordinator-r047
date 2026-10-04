@@ -192,21 +192,11 @@ func (m *MemoryRepository) ExpireReviewWindows(
 		if !authorization.RequiresExpiry() {
 			continue
 		}
-		wasApproved := nextCommand.Status == domain.CommandApproved
 		if !authorization.ExpireCommand(&nextCommand) {
 			continue
 		}
 		m.commands[commandID] = nextCommand
 		expired = append(expired, commandID)
-		if wasApproved {
-			nextGate, exists := m.gates[nextCommand.GateID]
-			if !exists {
-				continue
-			}
-			if nextGate.Release(nextCommand.ID, now) {
-				m.gates[nextGate.ID] = nextGate
-			}
-		}
 	}
 	sort.Strings(expired)
 	return expired, nil
