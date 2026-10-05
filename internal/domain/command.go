@@ -20,7 +20,6 @@ const (
 const (
 	defaultReviewWindow = 15 * time.Minute
 	maxReviewWindow     = 24 * time.Hour
-	reviewGracePeriod   = 2 * time.Second
 )
 
 type ReviewAuthorizationState string
@@ -33,11 +32,10 @@ const (
 )
 
 type ReviewAuthorization struct {
-	State         ReviewAuthorizationState
-	Deadline      time.Time
-	GraceDeadline time.Time
-	EvaluatedAt   time.Time
-	Reason        string
+	State       ReviewAuthorizationState
+	Deadline    time.Time
+	EvaluatedAt time.Time
+	Reason      string
 }
 
 type GateCommand struct {
@@ -141,30 +139,33 @@ func (c GateCommand) ReviewAuthorization(now time.Time) ReviewAuthorization {
 		deadline = evaluatedAt
 	}
 	state := ReviewAuthorizationSettled
-	switch c.Status {
-	case CommandPending:
+	switch {
+	case c.Status == CommandPending && !evaluatedAt.Before(deadline):
+		// The review window only constrains commands that are still pending.
+		state = ReviewAuthorizationElapsed
+	case c.Status == CommandPending:
 		state = ReviewAuthorizationPending
-	case CommandApproved:
+	case c.Status == CommandApproved:
+		// A timely approval remains valid for the whole execution, regardless
+		// of the declared review deadline.
 		state = ReviewAuthorizationApproved
-	case CommandExpired:
+	case c.Status == CommandExpired:
 		state = ReviewAuthorizationElapsed
 	}
 	return ReviewAuthorization{
-		State:         state,
-		Deadline:      deadline,
-		GraceDeadline: deadline.Add(reviewGracePeriod),
-		EvaluatedAt:   evaluatedAt,
-		Reason:        "review_window_elapsed",
+		State:       state,
+		Deadline:    deadline,
+		EvaluatedAt: evaluatedAt,
+		Reason:      "review_window_elapsed",
 	}
 }
 
 func (a ReviewAuthorization) AllowsReview() bool {
-	return a.State == ReviewAuthorizationPending &&
-		a.EvaluatedAt.Before(a.GraceDeadline)
+	return a.State == ReviewAuthorizationPending
 }
 
 func (a ReviewAuthorization) RequiresExpiry() bool {
-	return !a.EvaluatedAt.Before(a.GraceDeadline)
+	return a.State == ReviewAuthorizationElapsed
 }
 
 func (a ReviewAuthorization) Error() error {
@@ -175,7 +176,9 @@ func (a ReviewAuthorization) Error() error {
 }
 
 func (a ReviewAuthorization) ExpireCommand(command *GateCommand) bool {
-	if command.Status != CommandPending && command.Status != CommandApproved {
+	// Only unreviewed commands expire; an approval formed on time must stay
+	// valid until execution ends, and terminal states never regress.
+	if command.Status != CommandPending {
 		return false
 	}
 	command.ExecutionToken = ""
